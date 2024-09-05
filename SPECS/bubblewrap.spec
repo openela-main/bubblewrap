@@ -1,12 +1,13 @@
 Name: bubblewrap
 Version: 0.4.0
-Release: 1%{?dist}
+Release: 2%{?dist}
 Summary: Core execution tool for unprivileged containers
 
 License: LGPLv2+
 #VCS: git:https://github.com/projectatomic/bubblewrap
 URL: https://github.com/projectatomic/bubblewrap
 Source0: https://github.com/projectatomic/bubblewrap/releases/download/v%{version}/bubblewrap-%{version}.tar.xz
+Patch0: 0001-Add-bind-fd-and-ro-bind-fd-to-let-you-bind-a-O_PATH-.patch
 
 BuildRequires: autoconf automake libtool
 BuildRequires: gcc
@@ -21,7 +22,7 @@ containers that works as a setuid binary on kernels without
 user namespaces.
 
 %prep
-%autosetup
+%autosetup -p1
 
 %build
 if ! test -x configure; then NOCONFIGURE=1 ./autogen.sh; fi
@@ -45,6 +46,9 @@ find %{buildroot} -name '*.la' -delete -print
 %{_mandir}/man1/*
 
 %changelog
+* Fri Aug 30 2024 Kalev Lember <klember@redhat.com> - 0.4.0-2
+- Backport upstream fix to help address CVE-2024-42472 in flatpak
+
 * Thu Jan 09 2020 David King <dking@redhat.com> - 0.4.0-1
 - Rebase to 0.4.0 (#1788067)
 
