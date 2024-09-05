@@ -1,6 +1,6 @@
 Name: bubblewrap
 Version: 0.4.1
-Release: 6%{?dist}
+Release: 7%{?dist}
 Summary: Core execution tool for unprivileged containers
 
 License: LGPLv2+
@@ -8,6 +8,7 @@ License: LGPLv2+
 URL: https://github.com/projectatomic/bubblewrap
 Source0: https://github.com/projectatomic/bubblewrap/releases/download/v%{version}/bubblewrap-%{version}.tar.xz
 Patch0: 0001-Avoid-memory-leak-if-args-is-specified-multiple-time.patch
+Patch1: 0001-0.4.0-Add-bind-fd-and-ro-bind-fd-to-let-you-bind-a-O.patch
 
 BuildRequires: autoconf automake libtool
 BuildRequires: gcc
@@ -23,7 +24,7 @@ containers that works as a setuid binary on kernels without
 user namespaces.
 
 %prep
-%autosetup
+%autosetup -p1
 
 %build
 if ! test -x configure; then NOCONFIGURE=1 ./autogen.sh; fi
@@ -47,6 +48,9 @@ find %{buildroot} -name '*.la' -delete -print
 %{_mandir}/man1/*
 
 %changelog
+* Wed Aug 28 2024 Kir Kolyshkin <kolyshkin@gmail.com> - 0.4.1-7
+- Add support for --bind-fd and --ro-bind-fd (CVE-2024-42472)
+
 * Mon Aug 09 2021 Mohan Boddu <mboddu@redhat.com> - 0.4.1-6
 - Rebuilt for IMA sigs, glibc 2.34, aarch64 flags
   Related: rhbz#1991688
