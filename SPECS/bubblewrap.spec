@@ -1,6 +1,6 @@
 Name: bubblewrap
 Version: 0.4.1
-Release: 7%{?dist}
+Release: 8%{?dist}
 Summary: Core execution tool for unprivileged containers
 
 License: LGPLv2+
@@ -8,7 +8,8 @@ License: LGPLv2+
 URL: https://github.com/projectatomic/bubblewrap
 Source0: https://github.com/projectatomic/bubblewrap/releases/download/v%{version}/bubblewrap-%{version}.tar.xz
 Patch0: 0001-Avoid-memory-leak-if-args-is-specified-multiple-time.patch
-Patch1: 0001-0.4.0-Add-bind-fd-and-ro-bind-fd-to-let-you-bind-a-O.patch
+Patch1: 0001-Accept-EROFS-for-access-check-of-proc-entries.patch
+Patch2: 0001-Add-bind-fd-and-ro-bind-fd-to-let-you-bind-a-O_PATH-.patch
 
 BuildRequires: autoconf automake libtool
 BuildRequires: gcc
@@ -48,8 +49,11 @@ find %{buildroot} -name '*.la' -delete -print
 %{_mandir}/man1/*
 
 %changelog
-* Wed Aug 28 2024 Kir Kolyshkin <kolyshkin@gmail.com> - 0.4.1-7
-- Add support for --bind-fd and --ro-bind-fd (CVE-2024-42472)
+* Fri Aug 30 2024 Kalev Lember <klember@redhat.com> - 0.4.1-8
+- Backport upstream fix to help address CVE-2024-42472 in flatpak
+
+* Fri Mar 15 2024 Daan De Meyer <daan.j.demeyer@gmail.com> - 0.4.1-7
+- Backport https://github.com/containers/bubblewrap/commit/4c35d7a5f92499d6ed646d4a5ffad9acc10cb432
 
 * Mon Aug 09 2021 Mohan Boddu <mboddu@redhat.com> - 0.4.1-6
 - Rebuilt for IMA sigs, glibc 2.34, aarch64 flags

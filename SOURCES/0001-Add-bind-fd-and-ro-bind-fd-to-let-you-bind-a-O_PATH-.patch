@@ -1,8 +1,7 @@
-From 10e62a964d465884b972571b258042493259b00b Mon Sep 17 00:00:00 2001
+From 52d5f7c3ba5c8e10b3a992304fd28cd4d18caeeb Mon Sep 17 00:00:00 2001
 From: Alexander Larsson <alexl@redhat.com>
 Date: Tue, 18 Jun 2024 10:20:36 +0200
-Subject: [PATCH] [0.4.0] Add --bind-fd and --ro-bind-fd to let you bind a
- O_PATH fd.
+Subject: [PATCH] Add --bind-fd and --ro-bind-fd to let you bind a O_PATH fd.
 
 This is useful for example if you for some reason don't have the real
 path. It is also a way to make bind-mounts race-free (i.e. to have the
@@ -16,17 +15,17 @@ permitted, but at least we can delay resolving the fd to a path as much as
 possible, and then validate after mount that we actually mounted the right
 thing.
 
-[@kolyshkin: backport commit a253257cd298892 to v0.4.0]
-
 Signed-off-by: Alexander Larsson <alexl@redhat.com>
-Signed-off-by: Kir Kolyshkin <kolyshkin@gmail.com>
+(cherry picked from commit a253257cd298892da43e15201d83f9a02c9b58b5)
+[kalev: Backport to 0.4.x]
+Signed-off-by: Kalev Lember <klember@redhat.com>
 ---
  bubblewrap.c      | 50 +++++++++++++++++++++++++++++++++++++++++++++++
- tests/test-run.sh |  5 +++++
- 2 files changed, 55 insertions(+)
+ tests/test-run.sh |  7 ++++++-
+ 2 files changed, 56 insertions(+), 1 deletion(-)
 
 diff --git a/bubblewrap.c b/bubblewrap.c
-index 8d0c5f7..209c1a5 100644
+index b3d52bc..38b3646 100644
 --- a/bubblewrap.c
 +++ b/bubblewrap.c
 @@ -250,6 +250,8 @@ usage (int ecode, FILE *out)
@@ -38,7 +37,7 @@ index 8d0c5f7..209c1a5 100644
             "    --remount-ro DEST            Remount DEST as readonly; does not recursively remount\n"
             "    --exec-label LABEL           Exec label for the sandbox\n"
             "    --file-label LABEL           File label for temporary sandbox content\n"
-@@ -1106,6 +1108,30 @@ setup_newroot (bool unshare_pid,
+@@ -1111,6 +1113,30 @@ setup_newroot (bool unshare_pid,
                           (op->type == SETUP_RO_BIND_MOUNT ? BIND_READONLY : 0) |
                           (op->type == SETUP_DEV_BIND_MOUNT ? BIND_DEVICES : 0),
                           source, dest);
@@ -69,7 +68,7 @@ index 8d0c5f7..209c1a5 100644
            break;
  
          case SETUP_REMOUNT_RO_NO_RECURSIVE:
-@@ -1643,6 +1669,30 @@ parse_args_recurse (int          *argcp,
+@@ -1648,6 +1674,30 @@ parse_args_recurse (int          *argcp,
            if (strcmp(arg, "--dev-bind-try") == 0)
              op->flags = ALLOW_NOTEXIST;
  
@@ -101,10 +100,19 @@ index 8d0c5f7..209c1a5 100644
            argc -= 2;
          }
 diff --git a/tests/test-run.sh b/tests/test-run.sh
-index a01f41c..345db46 100755
+index 702c480..ce1eaf6 100755
 --- a/tests/test-run.sh
 +++ b/tests/test-run.sh
-@@ -375,5 +375,10 @@ else
+@@ -80,7 +80,7 @@ if ! $RUN true; then
+     skip Seems like bwrap is not working at all. Maybe setuid is not working
+ fi
+ 
+-echo "1..49"
++echo "1..50"
+ 
+ # Test help
+ ${BWRAP} --help > help.txt
+@@ -382,5 +382,10 @@ else
      echo "ok - Test --pidns"
  fi
  
