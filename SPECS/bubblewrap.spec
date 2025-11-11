@@ -1,23 +1,18 @@
 Name: bubblewrap
-Version: 0.4.1
-Release: 8%{?dist}
+Version: 0.6.3
+Release: 1%{?dist}
 Summary: Core execution tool for unprivileged containers
 
-License: LGPLv2+
-#VCS: git:https://github.com/projectatomic/bubblewrap
-URL: https://github.com/projectatomic/bubblewrap
-Source0: https://github.com/projectatomic/bubblewrap/releases/download/v%{version}/bubblewrap-%{version}.tar.xz
-Patch0: 0001-Avoid-memory-leak-if-args-is-specified-multiple-time.patch
-Patch1: 0001-Accept-EROFS-for-access-check-of-proc-entries.patch
-Patch2: 0001-Add-bind-fd-and-ro-bind-fd-to-let-you-bind-a-O_PATH-.patch
+License: LGPL-2.0-or-later
+URL:     https://github.com/containers/bubblewrap/
+Source0: https://github.com/containers/bubblewrap/releases/download/v%{version}/bubblewrap-%{version}.tar.xz
 
-BuildRequires: autoconf automake libtool
 BuildRequires: gcc
-BuildRequires: libcap-devel
-BuildRequires: pkgconfig(libselinux)
-BuildRequires: libxslt
 BuildRequires: docbook-style-xsl
-BuildRequires: make
+BuildRequires: meson
+BuildRequires: pkgconfig(libcap)
+BuildRequires: pkgconfig(libselinux)
+BuildRequires: /usr/bin/xsltproc
 
 %description
 Bubblewrap (/usr/bin/bwrap) is a core execution engine for unprivileged
@@ -28,27 +23,34 @@ user namespaces.
 %autosetup -p1
 
 %build
-if ! test -x configure; then NOCONFIGURE=1 ./autogen.sh; fi
-%configure --disable-silent-rules --with-priv-mode=none
-%make_build
+%meson -Dman=enabled
+%meson_build
 
 %install
-%make_install INSTALL="install -p -c"
-find %{buildroot} -name '*.la' -delete -print
+%meson_install
 
 %files
 %license COPYING
+%doc README.md
 %dir %{_datadir}/bash-completion
 %dir %{_datadir}/bash-completion/completions
 %{_datadir}/bash-completion/completions/bwrap
+%dir %{_datadir}/zsh
+%dir %{_datadir}/zsh/site-functions
+%{_datadir}/zsh/site-functions/_bwrap
 %if (0%{?rhel} != 0 && 0%{?rhel} <= 7)
 %attr(0755,root,root) %caps(cap_sys_admin,cap_net_admin,cap_sys_chroot,cap_setuid,cap_setgid=ep) %{_bindir}/bwrap
 %else
 %{_bindir}/bwrap
 %endif
-%{_mandir}/man1/*
+%{_mandir}/man1/bwrap.1*
 
 %changelog
+* Fri Aug 30 2024 Joseph Marrero <jmarrero@redhat.com> - 0.6.3-1
+- Rebase to 0.6.3 which is supported upstream
+  This release also includes the fix for CVE-2024-42472
+  Fixes: #RHEL-56797
+
 * Fri Aug 30 2024 Kalev Lember <klember@redhat.com> - 0.4.1-8
 - Backport upstream fix to help address CVE-2024-42472 in flatpak
 
