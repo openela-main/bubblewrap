@@ -1,11 +1,16 @@
 Name: bubblewrap
 Version: 0.6.3
-Release: 1%{?dist}
+Release: 1%{?dist}.1
 Summary: Core execution tool for unprivileged containers
 
 License: LGPL-2.0-or-later
 URL:     https://github.com/containers/bubblewrap/
 Source0: https://github.com/containers/bubblewrap/releases/download/v%{version}/bubblewrap-%{version}.tar.xz
+Patch0: bubblewrap-0.6.3-CVE-2026-87766.patch
+Patch1: bubblewrap-0.6.3-CVE-2026-87766-followup.patch
+Patch2: bubblewrap-0.6.3-test-compat.patch
+# Handle inaccessible document portals in desktop test environments
+Patch3: bubblewrap-0.6.3-test-document-portal.patch
 
 BuildRequires: gcc
 BuildRequires: docbook-style-xsl
@@ -46,6 +51,11 @@ user namespaces.
 %{_mandir}/man1/bwrap.1*
 
 %changelog
+* Tue Oct 06 2026 Security Team <secalert@redhat.com> - 0.6.3-1.1
+- Fix CVE-2026-87766 path traversal through symlinked mount targets
+- Use O_PATH for parent directory traversal during setup
+- Resolves: RHEL-256871
+
 * Fri Aug 30 2024 Joseph Marrero <jmarrero@redhat.com> - 0.6.3-1
 - Rebase to 0.6.3 which is supported upstream
   This release also includes the fix for CVE-2024-42472

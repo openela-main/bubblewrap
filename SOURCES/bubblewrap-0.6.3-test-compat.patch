@@ -1,0 +1,472 @@
+diff --git a/tests/sandbox_helper.py b/tests/sandbox_helper.py
+new file mode 100644
+index 0000000..0be7f45
+--- /dev/null
++++ b/tests/sandbox_helper.py
+@@ -0,0 +1,90 @@
++#!/usr/bin/env python3
++# Copyright 2024 Alexander Larsson
++# SPDX-License-Identifier: LGPL-2.0-or-later
++#
++# Helper script that runs inside a bwrap sandbox. Receives commands
++# over a socket fd and sends back JSON results.
++# stdout/stderr remain free for debug logging.
++
++import importlib.util
++import json
++import os
++import socket
++import sys
++import traceback
++import unittest
++
++
++def load_module(module_path):
++    spec = importlib.util.spec_from_file_location('_sandbox_test', module_path)
++    mod = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(mod)
++    return mod
++
++
++def handle_run_test(cmd):
++    info = cmd['run_test']
++    mod = load_module(info['module'])
++    cls = getattr(mod, info['class'])
++    method_name = info['method']
++
++    tc = cls(method_name)
++    try:
++        getattr(tc, method_name)()
++        return {'ok': True}
++    except Exception:
++        return {'ok': False, 'error': traceback.format_exc()}
++
++
++def handle_eval(cmd):
++    code = cmd.get('eval', '')
++    try:
++        result = eval(code)  # noqa: S307
++        return {'ok': True, 'result': result}
++    except Exception as e:
++        return {'ok': False, 'error': str(e)}
++
++
++def main():
++    if len(sys.argv) != 2:
++        print(f'Usage: {sys.argv[0]} SOCKET_FD', file=sys.stderr)
++        sys.exit(1)
++
++    fd = int(sys.argv[1])
++    sock = socket.fromfd(fd, socket.AF_UNIX, socket.SOCK_STREAM)
++    os.close(fd)
++
++    buf = b''
++    while True:
++        chunk = sock.recv(4096)
++        if not chunk:
++            break
++        buf += chunk
++
++        while b'\n' in buf:
++            line, buf = buf.split(b'\n', 1)
++            try:
++                cmd = json.loads(line)
++            except json.JSONDecodeError as e:
++                resp = {'ok': False, 'error': f'bad json: {e}'}
++                sock.sendall(json.dumps(resp).encode() + b'\n')
++                continue
++
++            if cmd.get('exit'):
++                sock.close()
++                return
++
++            if 'run_test' in cmd:
++                resp = handle_run_test(cmd)
++            elif 'eval' in cmd:
++                resp = handle_eval(cmd)
++            else:
++                resp = {'ok': False, 'error': 'unknown command'}
++
++            sock.sendall(json.dumps(resp).encode() + b'\n')
++
++    sock.close()
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/tests/test-helper.py b/tests/test-helper.py
+new file mode 100644
+index 0000000..4725897
+--- /dev/null
++++ b/tests/test-helper.py
+@@ -0,0 +1,270 @@
++#!/usr/bin/env python3
++# Copyright 2024 Alexander Larsson
++# SPDX-License-Identifier: LGPL-2.0-or-later
++#
++# Test infrastructure for bwrap sandbox integration tests.
++# Provides BwrapSandbox context manager, SourceTree fixture,
++# @in_sandbox / @sandbox_test_class decorators, and TAP runner.
++
++import json
++import os
++import socket
++import subprocess
++import sys
++import unittest
++
++
++BWRAP = os.getenv('BWRAP', 'bwrap')
++HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
++                      'sandbox_helper.py')
++
++
++def in_sandbox(*sandbox_args):
++    """Decorator: marks a method to run inside a bwrap sandbox.
++
++    Args are bwrap options. Use callables (taking self) for dynamic
++    values like fixture paths, e.g.:
++        @in_sandbox('--ro-bind', lambda self: self.src.file, '/tmp/f')
++    """
++    def decorator(fn):
++        fn._sandbox_args = sandbox_args
++        return fn
++    return decorator
++
++
++def sandbox_test_class(cls):
++    """Class decorator: for each @in_sandbox method, installs a
++    sandboxed_* copy and replaces the original with a host-side
++    wrapper that launches bwrap and runs it remotely."""
++    for name in list(vars(cls)):
++        fn = vars(cls)[name]
++        if not hasattr(fn, '_sandbox_args'):
++            continue
++
++        sandbox_args = fn._sandbox_args
++        sandboxed_name = 'sandboxed_' + name
++
++        setattr(cls, sandboxed_name, fn)
++
++        def make_wrapper(sname, sargs):
++            def wrapper(self):
++                resolved = [a(self) if callable(a) else a for a in sargs]
++                with BwrapSandbox(*resolved) as sb:
++                    sb.run_test(self, sname)
++            return wrapper
++
++        wrapper = make_wrapper(sandboxed_name, sandbox_args)
++        wrapper.__name__ = name
++        wrapper.__qualname__ = fn.__qualname__
++        setattr(cls, name, wrapper)
++
++    return cls
++
++
++class OpenFd:
++    """Placeholder in @in_sandbox args: opens path with O_PATH at launch time."""
++    def __init__(self, path):
++        self.path = path
++
++
++class DataFd:
++    """Placeholder in @in_sandbox/run_bwrap args: creates a pipe with content."""
++    def __init__(self, content):
++        self.content = content
++
++
++class BwrapSandbox:
++    """Context manager that runs a bwrap sandbox with a Python helper.
++
++    Base setup is --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp,
++    so test destinations that need to be created should go under /tmp.
++    """
++
++    def __init__(self, *extra_args):
++        self.extra_args = list(extra_args)
++        self.proc = None
++        self._parent_sock = None
++        self._opened_fds = []
++
++    def __enter__(self):
++        parent_sock, child_sock = socket.socketpair(
++            socket.AF_UNIX, socket.SOCK_STREAM,
++        )
++        self._parent_sock = parent_sock
++        child_fd = child_sock.fileno()
++
++        resolved_args = []
++        for arg in self.extra_args:
++            if isinstance(arg, OpenFd):
++                fd = os.open(arg.path, os.O_PATH)
++                self._opened_fds.append(fd)
++                resolved_args.append(str(fd))
++            elif isinstance(arg, DataFd):
++                r, w = os.pipe()
++                os.write(w, arg.content)
++                os.close(w)
++                self._opened_fds.append(r)
++                resolved_args.append(str(r))
++            else:
++                resolved_args.append(arg)
++
++        cmd = [
++            BWRAP, *BASE_BWRAP_ARGS,
++            *resolved_args,
++            'python3', HELPER, str(child_fd),
++        ]
++
++        self.proc = subprocess.Popen(
++            cmd,
++            pass_fds=(child_fd, *self._opened_fds),
++        )
++        child_sock.close()
++        for fd in self._opened_fds:
++            os.close(fd)
++        self._opened_fds = []
++
++        self._buf = b''
++        return self
++
++    def __exit__(self, *exc):
++        try:
++            self._send({'exit': True})
++        except OSError:
++            pass
++
++        self._parent_sock.close()
++
++        if self.proc:
++            self.proc.wait(timeout=5)
++        return False
++
++    def _send(self, msg):
++        self._parent_sock.sendall(json.dumps(msg).encode() + b'\n')
++
++    def _recv(self):
++        while b'\n' not in self._buf:
++            chunk = self._parent_sock.recv(4096)
++            if not chunk:
++                raise ConnectionError('sandbox helper closed connection')
++            self._buf += chunk
++        line, self._buf = self._buf.split(b'\n', 1)
++        return json.loads(line)
++
++    def run_test(self, test_case, method_name):
++        """Run a test method from test_case's class inside the sandbox."""
++        self._send({
++            'run_test': {
++                'module': self._test_module(test_case),
++                'class': type(test_case).__name__,
++                'method': method_name,
++            },
++        })
++        resp = self._recv()
++        if not resp['ok']:
++            raise AssertionError(
++                f'sandboxed test failed:\n{resp["error"]}',
++            )
++
++    def _test_module(self, test_case):
++        """Get the file path of the module that defines the test case."""
++        import inspect
++        return os.path.abspath(inspect.getfile(type(test_case)))
++
++
++BASE_BWRAP_ARGS = ['--ro-bind', '/', '/', '--dev', '/dev',
++                   '--proc', '/proc', '--tmpfs', '/tmp']
++
++
++def run_bwrap(*extra_args, pass_fds=()):
++    """Run bwrap with base sandbox args plus extra_args, return CompletedProcess.
++
++    Args may include DataFd instances, which are resolved to pipe fds.
++    """
++    opened_fds = []
++    resolved_args = []
++    for arg in extra_args:
++        if isinstance(arg, DataFd):
++            r, w = os.pipe()
++            os.write(w, arg.content)
++            os.close(w)
++            opened_fds.append(r)
++            resolved_args.append(str(r))
++        else:
++            resolved_args.append(arg)
++    cmd = [BWRAP, *BASE_BWRAP_ARGS, *resolved_args]
++    try:
++        return subprocess.run(
++            cmd,
++            stdin=subprocess.DEVNULL,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.PIPE,
++            pass_fds=(*pass_fds, *opened_fds),
++        )
++    finally:
++        for fd in opened_fds:
++            os.close(fd)
++
++
++def list_mounts():
++    """Return list of mountpoints from /proc/self/mounts."""
++    with open('/proc/self/mounts') as f:
++        return [line.split()[1] for line in f]
++
++
++def can_run_bwrap():
++    """Check if bwrap can run at all."""
++    try:
++        r = subprocess.run(
++            [BWRAP, '--ro-bind', '/', '/', 'true'],
++            stdin=subprocess.DEVNULL,
++            stdout=subprocess.DEVNULL,
++            stderr=subprocess.DEVNULL,
++        )
++        return r.returncode == 0
++    except (FileNotFoundError, OSError):
++        return False
++
++
++class TAPResult(unittest.TestResult):
++    def __init__(self):
++        super().__init__()
++        self.index = 0
++
++    def _test_name(self, test):
++        return test._testMethodName
++
++    def _print_diagnostics(self, test, err):
++        for line in self._exc_info_to_string(err, test).splitlines():
++            print(f'# {line}')
++
++    def addSuccess(self, test):
++        super().addSuccess(test)
++        self.index += 1
++        print(f'ok {self.index} {self._test_name(test)}')
++
++    def addFailure(self, test, err):
++        super().addFailure(test, err)
++        self.index += 1
++        print(f'not ok {self.index} {self._test_name(test)}')
++        self._print_diagnostics(test, err)
++
++    def addError(self, test, err):
++        super().addError(test, err)
++        self.index += 1
++        print(f'not ok {self.index} {self._test_name(test)}')
++        self._print_diagnostics(test, err)
++
++    def addSkip(self, test, reason):
++        super().addSkip(test, reason)
++        self.index += 1
++        print(f'ok {self.index} {self._test_name(test)} # SKIP {reason}')
++
++
++def run_tap_tests(module):
++    """Run all tests in module with TAP output."""
++    loader = unittest.TestLoader()
++    suite = loader.loadTestsFromModule(module)
++    result = TAPResult()
++    suite.run(result)
++    print(f'1..{result.index}')
++    sys.exit(0 if result.wasSuccessful() else 1)
+diff --git i/tests/test-sandbox.py w/tests/test-sandbox.py
+index 40f8683..2ed8a4e 100644
+--- i/tests/test-sandbox.py
++++ w/tests/test-sandbox.py
+@@ -340,14 +340,6 @@ class TestSandbox(unittest.TestCase):
+         mode = os.lstat('/tmp/t').st_mode & 0o7777
+         self.assertEqual(mode, 0o700)
+ 
+-    @in_sandbox('--size', str(64 * 1024), '--tmpfs', '/tmp/t')
+-    def test_tmpfs_size(self):
+-        self.assertIsMountpoint('/tmp/t')
+-        self.assertIsTmpfs('/tmp/t')
+-        st = os.statvfs('/tmp/t')
+-        total = st.f_blocks * st.f_frsize
+-        self.assertLessEqual(total, 64 * 1024 + 4096)
+-
+     # ------ proc ------
+ 
+     @in_sandbox()
+
+diff --git a/tests/meson.build b/tests/meson.build
+--- a/tests/meson.build
++++ b/tests/meson.build
+@@ -17,6 +17,7 @@
+ 
+ test_scripts = [
+   'test-run.sh',
++  'test-sandbox.py',
+   'test-seccomp.py',
+   'test-specifying-pidns.sh',
+   'test-specifying-userns.sh',
+
+diff --git a/bubblewrap.c b/bubblewrap.c
+index 1bedf34..a543ffc 100644
+--- a/bubblewrap.c
++++ b/bubblewrap.c
+@@ -2716,6 +2716,14 @@ parse_args_recurse (int          *argcp,
+           argv += 2;
+           argc -= 2;
+         }
++      else if (has_prefix (arg, "--debug-opt="))
++        {
++          const char *val = arg + strlen ("--debug-opt=");
++          if (strcmp (val, "force-openat-fallback") == 0)
++            opt_force_openat_fallback = TRUE;
++          else
++            die ("Unknown --debug-opt value: %s", val);
++        }
+       else if (strcmp (arg, "--") == 0)
+         {
+           argv += 1;
+diff --git a/safe_openat.c b/safe_openat.c
+index be68b9e..33a59c4 100644
+--- a/safe_openat.c
++++ b/safe_openat.c
+@@ -32,6 +32,8 @@
+ 
+ 
+ 
++int opt_force_openat_fallback = FALSE;
++
+ #define cleanup_close cleanup_fd
+ 
+ #define LIKELY(x) __builtin_expect ((x), 1)
+@@ -293,7 +295,7 @@ safe_openat (int dirfd, const char *rootfs, const char *path, int flags, int mod
+       return ret;
+     }
+ 
+-  if (openat2_supported)
++  if (openat2_supported && !opt_force_openat_fallback)
+     {
+     repeat:
+       ret = syscall_openat2 (dirfd, path, flags, mode, RESOLVE_IN_ROOT|RESOLVE_NO_MAGICLINKS);
+diff --git a/tests/test-sandbox.py b/tests/test-sandbox.py
+index 2ed8a4e..1d2367e 100644
+--- a/tests/test-sandbox.py
++++ b/tests/test-sandbox.py
+@@ -651,6 +651,9 @@ class TestSandbox(unittest.TestCase):
+     def _test_proc_symlink_escape(self, extra_bwrap_args):
+         """Verifies that a symlink pointing through /proc/self/fd
+         to an fd outside the sandbox cannot be used to escape the root."""
++        control = run_bwrap(*extra_bwrap_args, 'true')
++        self.assertEqual(control.returncode, 0, control.stderr)
++
+         escape_target = os.path.join(self.tmp, 'escape_target')
+         os.makedirs(escape_target)
+ 
+diff --git a/utils.h b/utils.h
+index fac76a0..f67baff 100644
+--- a/utils.h
++++ b/utils.h
+@@ -136,6 +136,8 @@ char *label_mount (const char *opt,
+ int   label_exec (const char *exec_label);
+ int   label_create_file (const char *file_label);
+ 
++extern int opt_force_openat_fallback;
++
+ int safe_openat (int dirfd,
+                  const char *rootfs,
+                  const char *path,
