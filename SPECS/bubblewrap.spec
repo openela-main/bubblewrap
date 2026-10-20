@@ -1,6 +1,6 @@
 Name: bubblewrap
 Version: 0.4.0
-Release: 2%{?dist}
+Release: 3%{?dist}
 Summary: Core execution tool for unprivileged containers
 
 License: LGPLv2+
@@ -8,6 +8,9 @@ License: LGPLv2+
 URL: https://github.com/projectatomic/bubblewrap
 Source0: https://github.com/projectatomic/bubblewrap/releases/download/v%{version}/bubblewrap-%{version}.tar.xz
 Patch0: 0001-Add-bind-fd-and-ro-bind-fd-to-let-you-bind-a-O_PATH-.patch
+# https://issues.redhat.com/browse/RHEL-256858
+# https://github.com/containers/bubblewrap/commit/c77dd38ebe75b4eabec3c9349d7099287886eeec
+Patch1: bubblewrap-0.4.0-CVE-2026-87766.patch
 
 BuildRequires: autoconf automake libtool
 BuildRequires: gcc
@@ -46,6 +49,9 @@ find %{buildroot} -name '*.la' -delete -print
 %{_mandir}/man1/*
 
 %changelog
+* Wed Sep 09 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 0.4.0-3
+- Security fix for CVE-2026-87766
+
 * Fri Aug 30 2024 Kalev Lember <klember@redhat.com> - 0.4.0-2
 - Backport upstream fix to help address CVE-2024-42472 in flatpak
 
